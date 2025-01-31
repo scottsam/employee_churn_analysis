@@ -1,0 +1,855 @@
+---
+title: "<center>Employee Churn Analysis and Prediction Report</center>"
+author: "<center>Samuel Owulezi</center>"
+date: "<center>2025-01-30</center>"
+output: 
+  html_document: 
+    toc: true
+    toc_depth: 3  
+    fig_caption: true
+    number_sections: true
+    df_print: kable
+    theme: readable
+    code_folding: show
+---
+
+
+
+```{r setup, include=FALSE,message=F,warning=F}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+
+# Introduction
+
+This report explores the factors influencing employee churn and develops a logistic regression model to predict the likelihood of employees leaving based on various features. Key variables include __years of service__, __communication scores__, __training scores__, __leave status__, __gender__, __age__, and __hours__ (full-time or part-time).
+
+Employee churn is a significant concern for employers, as high turnover disrupts operations and increases recruitment costs. Identifying churn factors can help refine retention strategies, while understanding performance predictors can enhance training and development.
+
+This analysis includes data pre-processing, exploratory analysis, statistical test and the creation of a logistic regression model for churn prediction, providing actionable insights for workforce management.
+
+
+
+# Data description and structure
+
+This are samples of the employee's responses to the following questions that we use for calculating the __*scores__.
+
+- leave - Are you considering leaving the company?
+
+- gender
+
+- age
+
+__Note: The client says no one works at the company who is under 19 or over 73__
+
+- LOSyears - Length of service years
+
+- LOSmonths - Length of service months (incomplete years)
+
+- hours - Weekly number of hours worked
+
+__These are  series of questions on a Likert scale relating to employee satisfaction. These are coded 5 =strongly agree, 4 = agree, 3 = neutral, 2= disagree, 1 = strongly disagree__
+
+- Q1. Communication at the store where I work is good
+- Q2. Communication between my store and other stores is good
+- Q3. I am usually informed about important Company-wide changes before they occur
+- Q4. I get the information I need to do my job well
+- Q5. I believe the company is open and honest with its employees
+- Q6. I am encouraged to learn new skills
+- Q7. When I joined I received sufficient training to enable me to do my job
+- Q8. My appraisal played a valuable part in planning my development
+- Q9. I am confident that I will be given the help I need to develop myself for a career
+- Q10. The promotion system is fair 
+- Q11. I am paid fairly for what I do
+- Q12. I believe that rewards compare well with those provided by other comparable employers
+- Q13. This is a good company to work for
+- Q14. I enjoy the work I do
+- Q15. The company does its best to provide a good work environment for its store-based staff
+- For the Likert questions Q1-Q5 a ‘__communication score__’ is calculated by taking the __average__ response across each of the five questions.
+- For the Likert questions Q6-Q10 a ‘__training score__’ is calculated by taking the __average__ response across each of the five questions.
+- For the Likert questions Q11-Q15 a ‘__working score__’ is calculated by taking the __average__ response across each of the five questions.
+
+# Load Libraries
+```{r libraries,}
+# load any required libraries / additional files here
+if(!require("ggplot2")){install.packages("ggplot2")}
+if(!require("flextable")){install.packages("flextable")}
+
+if(!require("tableone")){install.packages("tableone")}
+if(!require("ggcorrplot")){install.packages("ggcorrplot")}
+if(!require("car")){install.packages("car")}
+
+# load any required libraries / additional files here
+if(!require("resample")){install.packages("resample")}
+if(!require("vip")){install.packages("vip")}
+if(!require("caret")){install.packages("caret")}
+if(!require("ggcorrplot")){install.packages("ggcorrplot")}
+if(!require("ROCR")){install.packages("ROCR")}
+
+
+
+library(rsample)   # for data splitting
+library(tidyr)
+library(ROCR)
+
+library(broom)
+
+# Modeling packages
+library(caret)     # for logistic regression modeling
+
+# Model interpretability packages
+library(vip)       # variable importance
+
+library(ggplot2)
+library(flextable)
+library(psych)
+library(tableone)
+library(ggcorrplot)
+library(tidyverse)
+library(corrplot)
+library(car)           # For VIF calculation
+library(MASS)
+library(kableExtra)
+library(dplyr)
+
+```
+
+# Load the dataset
+```{r data}
+# load dataset here
+df <- read.csv("./data/raw/employee.csv",stringsAsFactors = T)
+
+```
+
+
+
+# Data preprocessing
+- Several categorical variables, including leave status, gender, and hours, were encoded as factors to facilitate analysis and ensure proper interpretation by the model.
+
+- Unusual values were discarded from the dataset
+
+- The preprocessing of the raw data produced a cleaned dataset
+
+
+```{r Q1}
+
+# Load the utility function
+load("./data/utility/utility.RData")
+
+
+#copy data
+employee_data_cp <- df
+
+
+# ---- Data Cleaning ----
+employee_data_cp <- employee_data_cp |>
+  
+  
+  mutate(service_year =round( LOSyears + (LOSmonths / 12),1), #convert months to years and add 
+         
+         comm_score = rowMeans(employee_data_cp[,7:11],na.rm=T), # mean of the selected column rows
+         
+         train_score = rowMeans(employee_data_cp[,12:16],na.rm=T),
+         
+         working_score = rowMeans(employee_data_cp[,17:21],na.rm=T),
+         
+         .before  = 1
+             ) |>
+  
+  #remove redundant columns
+  
+  dplyr::select(-starts_with(c("Q","LO"))) |>
+  
+  
+  filter(age >=  19 & age <= 73 ) |> # The client had stated the age ranges of employees in the organization
+  
+  distinct() # ensure duplicates are removed
+
+
+#check for missing values
+missing_values <- colSums(is.na(employee_data_cp))
+
+# replace "NotAns" with the mode value
+
+#get mode function from utility file
+employee_data_cp$hours[employee_data_cp$hours =="NotAns"] <- get_mode(employee_data_cp$hours) 
+
+employee_data_cp$hours <- droplevels(employee_data_cp$hours) #remove unused level
+
+
+
+
+nice_table(head(employee_data_cp),"New Employee Dataset")
+
+```
+
+ 
+# Exploratory Analysis
+
+The Exploratory Data Analysis (EDA) identified the key factors influencing employees' decisions to stay or leave. Essential variables included, __working scores__, __communication scores__, __training scores__, __job satisfaction__, __years of service__, __age__, and __hours__. Through summary statistics and analysis of distributions and correlations of key variables, we gained valuable insights into employee retention and turnover, visualizing the data by leave status to understand trends.
+
+
+## Summary statistics
+The dataset was filtered to obtain numerical variables and categorical variables separately for calculating summary stats easily
+
+### Numerical variables
+```{r, numerical_variables}
+
+load("./data/utility/utility.RData")
+
+
+# get all numerical variables
+numerical_variables <- sapply(employee_data_cp, is.numeric) # returns true if numeric
+
+numerical_df <- employee_data_cp[,numerical_variables] # dataframe of numeric variables
+
+# summary statistics of all numeric variables
+summary_stats <- data.frame(
+  Variables = colnames(numerical_df),
+  Mean = apply(numerical_df, 2,function(x) mean(x, na.rm = TRUE)),
+  Median = apply(numerical_df, 2, function(x) median(x, na.rm = TRUE)),
+  Q1 = apply(numerical_df, 2, function(x) quantile(x,0.25)),
+  Q3 = apply(numerical_df, 2, function(x) quantile(x,0.75)),
+  SD = apply(numerical_df, 2, function(x) sd(x, na.rm = TRUE)),
+  Min = apply(numerical_df, 2, function(x) min(x, na.rm = TRUE)),
+  Max = apply(numerical_df, 2, function(x) max(x, na.rm = TRUE))
+)
+
+# create a table to visualize the data
+nice_table(summary_stats,"Summary Statistics of Numerical Variables")
+
+
+```
+
+
+
+### Categorical variables
+```{r categorical_variables}
+# Load the utility function
+load("./data/utility/utility.RData")
+
+
+# categorical variables
+cat_variables <- sapply(employee_data_cp, is.factor) # returns true if factor
+
+cat_df <- employee_data_cp[,cat_variables] # dataframe of factor variables
+
+
+# summary statistics of factor variables
+all_categorical_summary <- cat_df |>
+  
+  pivot_longer(cols = c(leave, gender, hours), names_to = "variable", values_to = "value") |>
+  
+  mutate(variable = as.factor(variable)) |>
+  
+  group_by(variable,value) |>
+  
+  reframe(
+    count = n()
+  )
+nice_table(all_categorical_summary,"Summary Statistics of Categorical Variables")
+```
+
+#### __Interpretation__ 
+
+- All but the __training score__, are slightly right skewed from the numerical table above.This suggest that most employees are well trained by the organization
+
+- There are more full-time (FT) than part-time(PT) employees in the organization
+
+- There is only one member in the gender group that identifies as a transgender. This could alter the model if left untouched.
+
+Overall, There are more males employed in this organization than any gender and most of whom are full time employees.
+
+
+
+### Visualizing Key Variables by Leave Status
+
+#### Gender vs Leaving
+
+```{r fig.width=7,fig.height=5,fig.cap="fig.1: Barchart of the number of employees that intend to leave or stay, categorized by gender" ,warning=F }
+## ---- gender vs leaving ----
+gender_leaving <- function(){
+  gl <- employee_data_cp |>
+    ggplot(aes(x=leave,fill=gender)) +
+    geom_bar(color="black")+
+    geom_text(stat="count",aes(label = ..count..), vjust = -0.5) + 
+    
+    facet_wrap(~gender) +
+    theme_minimal()+
+    labs(title ="Number of Employees Leaving or Staying by Gender",
+         subtitle = "More males intend to leave the organization than the other genders",
+         y="Count of Employees",
+         x = "Leaving")+
+    
+    guides(fill="none")
+  return(gl)
+    
+}
+
+gender_leaving()
+```
+#### Key Insights: 
+- In total, about `r 9 + 27` employees are likely to leave the organization which is about `r round((9+27)/(20+9+49+1+27),2) * 100`%  of the total employees.
+- There are more males in the organization of which `r round((27)/(49+27),2) * 100`% are likely to leave. This in addition implies that more males intend to leave, although this is could be disputed based on the high number of males in the organization compared to the females.
+
+
+
+#### Employment-type(hours) vs leaving
+
+```{r fig.width=7,fig.height=5,fig.cap="fig.2: Barchart of the number of employees that intend to leave or stay, categorized by Employment type(PT or FT).Part-time employees seem to have a higher churn rate compared to full-time employees" , warning=F }
+
+## ---- employment-type(hours) vs leaving ----
+work_type_leaving <- function(){
+  
+  wt <- employee_data_cp |>
+    
+    ggplot(aes(x=leave,fill=hours)) +
+    
+    geom_bar(color="black")+
+    
+    geom_text(stat="count",aes(label = ..count..), vjust = -0.5) + 
+    
+    facet_wrap(~hours) +
+    theme_minimal()+
+    labs(title ="Number of Employees Leaving or Staying by Type of Employment",
+         subtitle = "More part-time employees are leaving than full-time employees",
+         y="Count of Employees",
+         x = "Leaving")+
+    
+    guides(fill="none")
+  return(wt)
+}
+
+work_type_leaving()
+```
+#### Key insights: 
+- In total, there are `r 49 + 15` full-time compared to `r 21+21` part-time employees in the organization.
+- Part-time employees seem to have a higher churn rate compared to full-time employees.
+- This could indicate that part-time workers may feel less committed to the company or have fewer incentives to stay.
+- The organization could focus on providing better benefits or engagement programs for part-time workers.
+
+
+
+
+
+
+
+#### Distribution of working_score vs leaving
+
+```{r fig.width=10,fig.height=5,fig.cap="fig.3: The boxplot displays the distribution of the working scores of employees categorized by employment type. " ,warning=F }
+## ---- distribution of working_score vs leaving ----
+work_score_leaving <- function(){
+  wl <- employee_data_cp |>
+    # plot the distribution  of working score
+    ggplot(aes(x = leave ,y = working_score)) +
+      geom_boxplot(size=0.5,
+                   outlier.shape = 1,
+                   outlier.color = "black",
+                   outlier.size  = 3) +
+      stat_summary(fun = mean, geom = "point",           # showing the mean with a red dot
+                   shape = 18, size = 3, color = "red") +
+      geom_jitter(alpha = 0.5,aes(color=hours,size = working_score) ,
+                  width=.2) + 
+      
+      labs(title = "Working Score of Employees and Number of Years worked", 
+           subtitle = "The distribution is slightly skewed to the left for employees leaving and skewed slighty right for employees staying",
+           x = "",
+           y = "Working Score") +
+      theme_minimal() +
+      #theme(legend.position = "none") +
+      coord_flip()
+  return(wl)
+}
+work_score_leaving()
+```
+
+#### Key insights: 
+- The working_score of employees leaving is slightly skewed to the left which implies a lower job statisfactory level. It also implies that these employees are likely to leave.
+
+- Most part-time employees have a lower working_score below $3.5$.
+
+Overall, the working_score of employees leaving is quite low compared to those who are not leaving. Additionally, part-time employees are more likely to leave due to their low working_score and job statisfactory level. Improving the working environment and maybe a growth plan for part-time employees may likely boost their working score and increase their chances of staying.
+
+
+#### Working Score vs. Communication Score
+```{r fig.width=10,fig.height=5,fig.cap="fig.4: A scatter plot of working score vs communication score.Employees who stayed tend to have a balanced working and communication score distribution." ,warning=F}
+ggplot(employee_data_cp, aes(x = working_score, y = comm_score, color = leave)) + 
+  geom_point(alpha = 0.7, size = 3) + 
+  theme_minimal() + 
+  labs(title = "Working Score vs. Communication Score",subtitle = "Employees with lower working and communication scores appear more likely to leave", x = "Working Score", y = "Communication Score")
+
+```
+#### Key insights:
+- Employees with lower working and communication scores appear more likely to leave.
+- Employees who stayed tend to have a balanced working and communication score distribution.
+- This suggests that employees with poor working conditions or communication abilities may be at a higher risk of leaving.
+
+
+
+#### Service year and leaving status
+```{r, fig.width=8,fig.height=5, fig.cap="fig.5: Box-plot of the number of years working in the organization vs leaving status. Employees who have stayed much longer tend to leave."}
+## ---- distribution of service_year vs leaving ----
+year_leaving <- function(){
+  yl <- employee_data_cp |>
+    # plot the distribution  of working score
+    ggplot(aes(x = leave ,y = service_year)) +
+    geom_boxplot(size=0.5,
+                 outlier.shape = 1,
+                 outlier.color = "black",
+                 outlier.size  = 3) +
+    stat_summary(fun = mean, geom = "point",           # showing the mean with a red dot
+                 shape = 18, size = 3, color = "red") +
+    geom_jitter(alpha = 0.5,aes(color=hours) ,
+                width=.2,size=5) + 
+    
+    labs(title = "Service year of employee by leaving status", 
+         subtitle = "Employees who are leaving,mostly have been in the organization longer than those staying",
+         x = "",
+         y = "Years of service") +
+    theme_minimal() +
+    #theme(legend.position = "none") +
+    coord_flip()
+  return(yl)
+}
+year_leaving()
+```
+
+
+#### Key insights
+- The chart reveals the difference in service years between the two groups. Employees who are leaving have spent more years on average in the organization compared to those who wants to stay. 
+- The reason could be that these employees are seeking new opportunities else where or there are no rewards or benefits for longer years of service. 
+- Awarding employees after `5` years of service could decrease employee churn rate.
+
+
+
+
+
+
+#### Training score density by Churn (Leave)
+```{r , fig.width=8,fig.height=5, fig.cap="fig.6: Density plot of training score by churn rate.Employees who wants to leave generally had lower training scores compared to those who stayed."}
+ggplot(data=employee_data_cp, aes(x = train_score, fill = leave)) + 
+  geom_density(alpha = 0.6) + 
+  theme_minimal() + 
+  labs(title = "Training Score Density by Churn",subtitle = 'Employees who wants to leave generally had lower training scores compared to those who stayed.', x = "Training Score", y = "Density")
+
+```
+#### Insights:
+- Employees who wants to leave generally had lower training scores compared to those who stayed.
+- This could indicate that lack of skill development or inadequate training programs may lead to higher churn.
+- Companies should consider improving training initiatives to retain employees.
+
+
+
+
+#### Service Years vs. Age
+```{r , fig.width=8,fig.height=5, fig.cap="fig.7:Scatter plot of Number of service years vs the Age of the employee. A positive correlation is observed between age and service years "}
+ggplot(employee_data_cp, aes(x = age, y = service_year, color = leave)) + 
+  geom_point(alpha = 0.7, size = 3) + 
+  geom_smooth(method = "lm", se = FALSE, linetype = "dashed") + 
+  theme_minimal() + 
+  labs(title = "Service Years vs. Age",subtitle = 'A positive correlation is observed between age and service years', x = "Age", y = "Years of Service")
+
+```
+
+#### Key insights:
+- A positive correlation is observed between age and service years, which is expected as older employees tend to have more experience.
+- However, some younger employees with fewer service years have a higher churn rate.
+- This suggests that early-career employees may be at higher risk of leaving, possibly due to better opportunities elsewhere.
+
+
+
+#### Employee Age Distribution by Churn
+```{r , fig.width=8,fig.height=5, fig.cap="fig.8: Employee's age vs Churn rate.Employees who left appear to be older on average than those who stayed"}
+ggplot(data=employee_data_cp, aes(x = leave, y = age, fill = leave)) + 
+  geom_violin(alpha = 0.6) + 
+  theme_minimal() + 
+  labs(title = "Employee Age Distribution by Churn",subtitle = "Employees who left appear to be older on average than those who stayed", x = "Churn Status", y = "Age")
+
+```
+#### Key insights:
+- Employees who left appear to be older on average than those who stayed.
+- Older employees may be more prone to leaving, possibly due to seeking career advancement or job changes.
+- Retention strategies should target older employees with benefits and rewards programmes.
+
+
+
+
+
+
+
+### Correlation Analysis
+A correlation analysis was performed to examine relationships among the numeric variables. This analysis aimed to identify if any factors were strongly correlated with working score or leave status. Communication score and training score showed a very slight positive correlation with working score, suggesting that employees with better scores in these areas tended to perform better and possibly stayed longer.
+
+
+
+```{r}
+# Calculate the correlation matrix
+cor_matrix <- cor(numerical_df, use = "complete.obs")
+
+
+# Using corrplot to visualize the correlation matrix
+corrplot(cor_matrix, method = "color", type = "upper", 
+         addCoef.col = "black", tl.col = "black", tl.srt = 45,
+         title = "Correlation Matrix of Numerical Variables",
+         mar = c(0, 0, 1, 0))
+```
+
+#### Interpretation
+- The working score shows a weak positive correlation,$0.29$, with training score suggesting employees are slightly satisfied with the level of training in the organization. more effort needs to be put to improve the training package for the employee.
+
+- A mild negative correlation ($-0.26$) between the working score and age shows that the more older the employee the more slightly reduced job satisfaction, though not to a severe extent. This finding could guide policies around work-life balance.
+
+
+
+### Key Insights from EDA on Employee Churn
+
+
+- Employees with poor working and communication scores are more likely to leave.Suggests a need for better workplace conditions and team   communication improvements.
+- Part-Time Employees Have Higher Churn Rates
+
+- Part-time workers leave more often than full-time employees. Retention efforts should focus on benefits and engagement programs for     part-time staff.
+- Younger Employees with Fewer Service Years Are at Higher Risk
+
+- Lower Training Scores Are Linked to Higher Churn
+
+- Employees with insufficient training tend to leave. Investing in skill development and training programs can help improve retention.
+- Younger Employees Show Higher Churn Rates
+
+
+
+
+# Statistical Test
+
+## Chi-square test for group association
+- Null hypothesis - $H_0:$: There is no relationship between `Employment Type` and `Churn(leave)`
+
+- Alternative hypothesis - $H_a:$: There is a significant relationship `Employment Type` and `Churn(leave)`
+
+```{r chi-square test}
+# ---- Chi-squared test ----
+
+# relationship between work-type(hours) and leaving
+# is there an association between this two categorical variables?
+
+
+# Perform Chi-Square Test
+chi_test <- function(){
+  # Create contingency table
+  table_leave_hours <- table(employee_data_cp$leave, employee_data_cp$hours)
+  chiTest <- chisq.test(table_leave_hours)
+  return(chiTest)
+}
+chi_test() 
+
+```
+
+### Interpretation
+A Chi-Square test of independence was conducted to examine the relationship between `Employment_type` and employee attrition `Leaving`. The results were significant (X² = 6.84, df = 1, p-value = 0.00892) with `p-value` less than `0.05` we reject the null hypothesis.This suggests that attrition rates vary by `Emploment_type(PT or FT)`. The organization should investigate further to determine why certain employment type have higher attrition rates and develop targeted retention strategies.
+
+
+
+
+
+## Two-sample test
+- Null hypothesis - $H_0: \mu_f = \mu_p$: There is no difference in the mean working score between of employees `Leaving` and `Not Leaving`
+
+- Alternative hypothesis - $H_a: \mu_f \neq \mu_p$: There is a difference in the mean working score between `Leaving` and `Not Leaving`
+
+
+
+
+
+### Check assumptions:
+```{r normality_check}
+
+
+# Load Data
+
+# ----Filter data by hours (FT and PT groups)----
+yes_scores <- employee_data_cp$working_score[employee_data_cp$leave == "Yes"] 
+
+no_scores <- employee_data_cp$working_score[employee_data_cp$leave == "No"]
+
+
+# ----Shapiro-Wilk Test for Normality----
+
+shapiro_test_yes <- shapiro.test(yes_scores) # For Yes group
+
+shapiro_test_no <- shapiro.test(no_scores) # For No group
+
+
+
+
+
+print(shapiro_test_yes)
+
+
+
+print(shapiro_test_no)
+
+
+
+
+
+
+#----Test for equal variance----
+var1 <- var(yes_scores)
+var2 <- var(no_scores)
+
+
+
+
+print(var1)
+
+print(var2)
+
+
+
+
+
+
+
+
+# ----Perform t-test----
+t_test_function <- function(){
+  # Perform Test
+  t_test <- t.test(yes_scores, no_scores, var.equal = T)
+  return(t_test)
+}
+t_test_function()
+
+
+#----confindence interval----
+confid_int <- t_test_function()$conf.int
+
+
+
+```
+
+#### Interpretation
+
+The Shapiro test for normality revealed that the distribution of Yes and No for attrition rates are entirely normally distributed and also the variances of the two groups are almost equal. These satisfies the assumptions.
+
+
+Since the p-value of $0.000033$ is less than the $0.05$ significant level, we reject the null hypothesis ($H_o$).
+There is sufficient statistical evidence to conclude that the mean working score for the `leaving` and `Not leaving` employees are significantly different, with a  `r paste("95% Confidence Interval: [", round(confid_int[1], 2), ", ", round(confid_int[2], 2), "]", sep = "")`  which does not include zero in the interval.
+
+
+
+
+# Machine Learning Model: Logistic Regression
+I used a logistic regression model to predict the likelihood of an employee churn. The model will also give us an insight to which factors that likely influences an employee decision to leave.
+
+
+```{r}
+# ---- Prepare the data ----
+
+# filter out the transgender group
+df <- employee_data_cp |>
+  filter(gender != "Transgender" ) |>
+  
+  mutate_if(is.ordered, factor, ordered = FALSE)
+
+#drop the transgender level
+df$gender = droplevels(df$gender)
+
+```
+
+
+The dataset will be splitted into training and a test set. To ensure that both datasets have the same distribution we employed a stratified splitting method of 70%-30%.
+
+```{r}
+# ---- Split data ----
+# Create training (80%) and test (20%) sets for the 
+
+
+set.seed(42)  # for reproducibility
+
+churn_split <- initial_split(df, prop = .70, strata = "leave") 
+
+churn_train <- training(churn_split) # training set
+churn_test  <- testing(churn_split)  # test set
+
+
+# ----Ratio of attrition in training and test set----
+
+table(churn_train$leave)
+table(churn_test$leave)
+
+```
+
+
+
+
+
+## Training  Logistic Regression Model Using (caret::train)
+We train two different models, using the working score as the predictor in the first model and all variables in the second model. finally, we choose the model with the highest accuracy as our final model.
+```{r}
+
+set.seed(42)
+# ----create model-1 and model-2  with training control (10-fold cross-validation)----
+cv_model1 <- train(
+  leave ~ working_score, # using the working score as the only predictor
+  data = churn_train, 
+  method = "glm",
+  family = "binomial",
+  trControl = trainControl(method = "cv", number = 10)
+)
+
+
+
+cv_model2 <- train(
+  leave ~ .,         # using all variables as the predictor
+  data = churn_train, 
+  method = "glm",
+  family = "binomial",
+  trControl = trainControl(method = "cv", number = 10)
+)
+
+
+
+# ----extract out of sample performance measures by resampling----
+summary_of_accuracy <-
+  
+  summary(
+    resamples(
+      list(
+        model1 = cv_model1, 
+        model2 = cv_model2
+      )
+    )
+  )$statistics$Accuracy
+
+
+
+
+
+
+
+# ----Model Summary----
+
+summary(cv_model1)
+
+```
+
+### Interpretation 
+- The mean accuracy of model-1 is  $0.7279$ compared to $0.6932$ for model-2. this means we would choose model-1 as our final model.
+
+- The chosen model also tells us that as the working_score of the employee increases the odd of attrition is `r round(exp(-1.373),2)* 100`% on the training data, which is quite low. This suggest that the employer should improve the
+
+
+
+
+## Model Evaluation on training set
+The model was evaluated using confusion matrix and the AUC score, which is a better way to find balance between the precision and recall score of the model.
+```{r}
+# confusion-matrix
+# predict class train_data
+pred_class <- predict(cv_model1, churn_train)
+
+
+
+# create confusion matrix
+conf_matrix <- confusionMatrix(
+  data = relevel(pred_class, ref = "Yes"), 
+  reference = relevel(churn_train$leave, ref = "Yes")
+)
+
+
+# Confusion matrix on the training set
+
+conf_matrix
+
+
+
+#---ROC Curve and AUC----
+
+# Compute predicted probabilities
+model1_prob <- predict(cv_model1, churn_train, type = "prob")$Yes
+
+# Compute AUC metrics for cv_model1 
+perf1 <- prediction(model1_prob, churn_train$leave) |>
+  performance(measure = "tpr", x.measure = "fpr")
+
+# Plot ROC curves for cv_model1 and cv_model2
+plot1 <- plot(perf1, col = "black", lty = 2, main = "ROC Curve for Logistic Regression")
+
+
+
+auc <- performance(prediction(model1_prob, churn_train$leave),"auc")
+auc_value <- auc@y.values[[1]] #Extract AUC value
+
+
+
+# AUC value on the training data
+auc_value
+
+
+
+```
+## Model Evaluation on the test data
+```{r}
+# ---- Model Evaluation on Test Data -----
+# confusion-matrix
+# predict class test_data
+pred_class_test <- predict(cv_model1, churn_test)
+
+
+
+# create confusion matrix
+conf_matrix_test <- confusionMatrix(
+  data = relevel(pred_class_test, ref = "Yes"), 
+  reference = relevel(churn_test$leave, ref = "Yes")
+)
+
+
+# Confusion matrix on the test set
+
+
+conf_matrix_test
+
+# ROC Curve and AUC
+# Compute predicted probabilities
+m1_prob_test <- predict(cv_model1, churn_test, type = "prob")$Yes
+
+# Compute AUC metrics for cv_model1 and cv_model3
+
+perf_test <- prediction(m1_prob_test, churn_test$leave) |>
+  performance(measure = "tpr", x.measure = "fpr")
+
+
+# Plot ROC curves for test data
+plot1_test <- plot(perf_test, col = "black", lty = 2, main = "ROC Curve for Logistic Regression")
+
+
+
+
+auc_test <- performance(prediction(m1_prob_test, churn_test$leave),"auc")
+auc_value_test <- auc_test@y.values[[1]] #Extract AUC value
+
+
+
+
+# AUC value on the test data
+
+auc_value_test
+```
+
+
+### Interpretation 
+- The AUC score on the training data was $0.76$ compared to $0.78$ on the test data. This indicates that that model is generalizes well on unseen data. It can also be noted that the only significant factor for attrition according to the model statistics is the `working score`. 
+
+# Conclusion and recommendation
+The logistic regression model provided insights into the possible factors that causes employee churn in the organization. The `working score` which relates to the following: employee welfare package, working environment, job satisfaction and rewards for good work, is the sole factor the employer needs to improve. 
+
+Finally, being aware of different employment statuses—such as full-time, part-time, and temporary — can help tailor support and resources to meet diverse employee needs. By concentrating on these areas, the organization can create a more productive and engaged workforce.
+
+# Limitations
+- The model is trained on a specific dataset, which may not generalize well to other companies or industries.
+- Potential bias in data collection could affect prediction accuracy.
+- The dataset has a limited number of observation which may likely impact the accuracy of the model
+- Logistic regression assumes a linear relationship, which may not fully capture complex interactions between variables.
+- Other external factors, such as economic conditions,salary or wages of the employee  are not considered in this analysis.
+
+
+
